@@ -27,10 +27,10 @@ def get_python_version():
 
 def get_dependencies():
     install_requires = [
-        "numpy>=1.22",
+        "numpy>=1.26.0",
         "scipy",
         "dacite",
-        "gymnasium==0.29.1",
+        "gymnasium>=1.1.1,<2.0.0",
         "h5py",
         "pyyaml",
         "tqdm",
