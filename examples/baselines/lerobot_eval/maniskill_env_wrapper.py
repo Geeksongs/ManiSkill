@@ -86,8 +86,12 @@ class ManiSkillLeRobotWrapper(gym.Wrapper):
         qpos = obs['agent']['qpos']
         agent_pos = qpos[:, :8].cpu().numpy() if hasattr(qpos, 'cpu') else qpos[:, :8]
 
+        # Return pixels as dict so preprocess_observation maps to observation.images.image
+        # (not observation.image)
         return {
-            'pixels': pixels,
+            'pixels': {
+                'image': pixels  # This will become observation.images.image
+            },
             'agent_pos': agent_pos.astype(np.float32)
         }
 
@@ -109,9 +113,37 @@ class ManiSkillVectorEnvWrapper(gym.Wrapper):
         super().__init__(env)
         self.task_description_str = task_description
 
+    @property
+    def num_envs(self):
+        """Return number of parallel environments."""
+        # ManiSkill stores num_envs in the unwrapped environment
+        return self.unwrapped.num_envs if hasattr(self.unwrapped, 'num_envs') else 1
+
+    @property
+    def envs(self):
+        """Return list-like access to environments for LeRobot compatibility."""
+        # LeRobot's add_envs_task expects env.envs[0] to access the first environment
+        # Return a list with self repeated num_envs times so env.envs[0] returns this wrapper
+        return [self] * self.num_envs
+
     def task_description(self):
         """Returns task description for LeRobot's add_envs_task() function."""
         return self.task_description_str
+
+    def call(self, method_name, *args, **kwargs):
+        """Support env.call() interface for vectorized environments."""
+        # LeRobot uses env.call("task_description") to get tasks from all envs
+        if method_name == "task_description" or method_name == "task":
+            return [self.task_description_str] * self.num_envs
+        # Delegate other calls to the underlying environment
+        elif hasattr(self.unwrapped, 'call'):
+            return self.unwrapped.call(method_name, *args, **kwargs)
+        else:
+            # Fallback: call the method directly
+            method = getattr(self, method_name, None)
+            if method is None:
+                method = getattr(self.unwrapped, method_name)
+            return [method(*args, **kwargs)] * self.num_envs
 
     def task(self):
         """Alternative method name for task description."""
@@ -151,7 +183,10 @@ class ManiSkillVectorEnvWrapper(gym.Wrapper):
         qpos = obs['agent']['qpos']
         agent_pos = qpos[:, :8].cpu().numpy() if hasattr(qpos, 'cpu') else qpos[:, :8]
 
+        # Return pixels as dict so preprocess_observation maps to observation.images.image
         return {
-            'pixels': pixels,
+            'pixels': {
+                'image': pixels  # This will become observation.images.image
+            },
             'agent_pos': agent_pos.astype(np.float32)
         }

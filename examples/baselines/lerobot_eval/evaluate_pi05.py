@@ -242,8 +242,17 @@ def main():
 
     # 1. Load policy
     print("Loading policy...")
-    policy = PI05Policy.from_pretrained(args.policy_path, device=args.device)
-    print(f"✓ Policy loaded: {args.policy_path}")
+    try:
+        policy = PI05Policy.from_pretrained(args.policy_path, device=args.device)
+        print(f"✓ Policy loaded: {args.policy_path}")
+    except Exception as e:
+        print(f"\n❌ ERROR: Failed to load policy from {args.policy_path}")
+        print(f"Error: {e}")
+        print("\nPossible solutions:")
+        print("1. Check your internet connection")
+        print("2. Try again after network is restored")
+        print("3. Download the model manually and use local path with --policy-path")
+        return
 
     # 2. Load dataset for stats (needed for normalization)
     print("\nLoading dataset stats...")
@@ -252,12 +261,24 @@ def main():
 
     # 3. Create preprocessor and postprocessor
     print("\nCreating preprocessors...")
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy.config,
-        pretrained_path=args.policy_path,
-        dataset_stats=dataset.meta.stats
-    )
-    print("✓ Preprocessors created")
+    try:
+        # Try to load from HuggingFace
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy.config,
+            pretrained_path=args.policy_path,
+            dataset_stats=dataset.meta.stats
+        )
+        print("✓ Preprocessors loaded from HuggingFace")
+    except (FileNotFoundError, ConnectionError) as e:
+        # If network fails or files not found, create from scratch using dataset stats
+        print(f"⚠ Could not load preprocessors from HuggingFace: {e}")
+        print("Creating preprocessors from scratch using dataset stats...")
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy.config,
+            pretrained_path=None,  # Don't try to download
+            dataset_stats=dataset.meta.stats
+        )
+        print("✓ Preprocessors created from dataset stats")
 
     # 4. Create evaluation environment
     print(f"\nCreating environment: {args.env_id}")
