@@ -20,6 +20,7 @@ from typing import Optional
 import numpy as np
 import torch
 import gymnasium as gym
+import os
 
 import mani_skill.envs
 from maniskill_env_wrapper import ManiSkillVectorEnvWrapper
@@ -242,12 +243,21 @@ def main():
 
     # 1. Load policy
     print("Loading policy...")
+    print(f"DEBUG: Policy path = {args.policy_path}")
+    print(f"DEBUG: Is HuggingFace path = {not args.policy_path.startswith('/') and not args.policy_path.startswith('.') and not os.path.exists(args.policy_path)}")
+    print(f"DEBUG: Current working directory = {os.getcwd()}")
+    print(f"DEBUG: Absolute policy path = {os.path.abspath(args.policy_path)}")
+    print(f"DEBUG: HF_HOME env var = {os.environ.get('HF_HOME', 'Not set')}")
+    print(f"DEBUG: HF_HUB_CACHE env var = {os.environ.get('HF_HUB_CACHE', 'Not set')}")
     try:
         policy = PI05Policy.from_pretrained(args.policy_path, device=args.device)
         print(f"✓ Policy loaded: {args.policy_path}")
     except Exception as e:
         print(f"\n❌ ERROR: Failed to load policy from {args.policy_path}")
+        print(f"Error type: {type(e).__name__}")
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         print("\nPossible solutions:")
         print("1. Check your internet connection")
         print("2. Try again after network is restored")
