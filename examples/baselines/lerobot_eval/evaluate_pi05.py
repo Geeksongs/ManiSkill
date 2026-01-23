@@ -173,18 +173,15 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     print(f"Safety: Maximum {MAX_STEPS_PER_EPISODE} steps per episode allowed\n")
 
     with torch.no_grad():
-        # URGENT FIX: Add per-episode max steps and total max steps
-        MAX_TOTAL_STEPS = 300  # Emergency: Stop after 300 total steps max
-        episodes_started = 0
-        episodes_started = min(num_episodes, num_envs)  # All envs start at once
+        # FIX: Track steps per episode to prevent infinite loops
+        episode_steps = [0] * num_envs  # Steps counter for each parallel environment
 
-        while episodes_completed < num_episodes and step_count < MAX_TOTAL_STEPS:
-            # Emergency debug: every step
-            print(f"  [Step {step_count:4d}] Episodes: {episodes_completed}/{num_episodes} | "
-                  f"Started: {episodes_started} | Keys in info: {list(info.keys()) if step_count < 5 else '...'}")
-            if step_count >= MAX_TOTAL_STEPS - 1:
-                print(f"  ⚠️  EMERGENCY STOP: Reached {MAX_TOTAL_STEPS} steps, exiting!")
-                break
+        while episodes_completed < num_episodes and step_count < MAX_STEPS_PER_EPISODE * num_episodes:
+            # Debug: Print progress every step for first 20 steps, then every 10 steps
+            if step_count < 20 or step_count % 10 == 0:
+                print(f"  [Step {step_count}] Episodes completed: {episodes_completed}/{num_episodes}")
+                if step_count < 20:
+                    print(f"    Episode steps: {episode_steps}")  # Show steps per environment
 
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
@@ -227,9 +224,15 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             if step_count < 20:
                 print(f"    → env.step()...")
             obs, reward, terminated, truncated, info = env.step(action_numpy)
+
+            # FIX: Increment steps for each environment
+            for i in range(num_envs):
+                episode_steps[i] += 1
+
             if step_count < 20:
                 print(f"    ← env.step() returned")
                 print(f"      terminated: {terminated}, truncated: {truncated}")
+                print(f"      episode steps: {episode_steps}")
                 print(f"      info keys: {info.keys() if info else 'None'}")
 
             # Collect metrics when episodes finish
@@ -265,10 +268,10 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                                     metrics["length"].append(ep_info["l"][i])
 
                     print(f"Episodes completed: {episodes_completed}/{num_episodes}")
-                else:
-                    # EMERGENCY INFO: Why no final_info?
-                    if step_count < 10:
-                        print(f"    WARNING: No 'final_info' in info. Keys: {list(info.keys())}")
+                    # FIX: Reset step counter for completed episodes
+                    for i, is_done in enumerate(done):
+                        if is_done:
+                            episode_steps[i] = 0
 
             # Increment step counter
             step_count += 1
@@ -277,6 +280,7 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
         if step_count >= MAX_STEPS_PER_EPISODE * num_episodes:
             print(f"\n⚠️  WARNING: Reached maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes} steps)")
             print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
+            print(f"   Episode steps: {episode_steps}")
             print(f"   This may indicate the policy or environment is not working correctly.")
 
     return metrics
