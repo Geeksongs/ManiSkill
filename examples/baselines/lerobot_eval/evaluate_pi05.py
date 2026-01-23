@@ -262,43 +262,6 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             print(f"   This may indicate the policy or environment is not working correctly.")
 
     return metrics
-            if terminated.any() or truncated.any():
-                done = terminated | truncated
-
-                # Check for final_info (contains success metrics)
-                if "final_info" in info:
-                    final_info = info["final_info"]
-
-                    # Count episodes that just finished
-                    for i, is_done in enumerate(done):
-                        if is_done and episodes_completed < num_episodes:
-                            episodes_completed += 1
-
-                            # Extract success metric
-                            if "is_success" in final_info:
-                                success = final_info["is_success"][i]
-                                metrics["success"].append(success)
-
-                            # Extract episode return
-                            if "episode" in final_info:
-                                ep_info = final_info["episode"]
-                                if "r" in ep_info:
-                                    metrics["return"].append(ep_info["r"][i])
-                                if "l" in ep_info:
-                                    metrics["length"].append(ep_info["l"][i])
-
-                    print(f"Episodes completed: {episodes_completed}/{num_episodes}")
-
-            # Increment step counter
-            step_count += 1
-
-        # Safety check: Did we exit due to max steps?
-        if step_count >= MAX_STEPS_PER_EPISODE * num_episodes:
-            print(f"\n⚠️  WARNING: Reached maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes} steps)")
-            print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
-            print(f"   This may indicate the policy or environment is not working correctly.")
-
-    return metrics
 
 
 def main():
