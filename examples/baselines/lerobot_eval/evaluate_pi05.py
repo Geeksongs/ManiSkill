@@ -173,10 +173,18 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     print(f"Safety: Maximum {MAX_STEPS_PER_EPISODE} steps per episode allowed\n")
 
     with torch.no_grad():
-        while episodes_completed < num_episodes and step_count < MAX_STEPS_PER_EPISODE * num_episodes:
-            # Debug: Print progress every step for first 20 steps, then every 10 steps
-            if step_count < 20 or step_count % 10 == 0:
-                print(f"  [Step {step_count}] Episodes completed: {episodes_completed}/{num_episodes}")
+        # URGENT FIX: Add per-episode max steps and total max steps
+        MAX_TOTAL_STEPS = 300  # Emergency: Stop after 300 total steps max
+        episodes_started = 0
+        episodes_started = min(num_episodes, num_envs)  # All envs start at once
+
+        while episodes_completed < num_episodes and step_count < MAX_TOTAL_STEPS:
+            # Emergency debug: every step
+            print(f"  [Step {step_count:4d}] Episodes: {episodes_completed}/{num_episodes} | "
+                  f"Started: {episodes_started} | Keys in info: {list(info.keys()) if step_count < 5 else '...'}")
+            if step_count >= MAX_TOTAL_STEPS - 1:
+                print(f"  ⚠️  EMERGENCY STOP: Reached {MAX_TOTAL_STEPS} steps, exiting!")
+                break
 
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
@@ -228,6 +236,12 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             if terminated.any() or truncated.any():
                 done = terminated | truncated
 
+                # EMERGENCY CHECK: Did any episode end?
+                if step_count < 10:
+                    print(f"    DEBUG: terminated={terminated.any()}, truncated={truncated.any()}, done={done.any()}")
+                    if done.any():
+                        print(f"    DEBUG: done indices: {torch.where(done)[0].tolist()}")
+
                 # Check for final_info (contains success metrics)
                 if "final_info" in info:
                     final_info = info["final_info"]
@@ -251,6 +265,10 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                                     metrics["length"].append(ep_info["l"][i])
 
                     print(f"Episodes completed: {episodes_completed}/{num_episodes}")
+                else:
+                    # EMERGENCY INFO: Why no final_info?
+                    if step_count < 10:
+                        print(f"    WARNING: No 'final_info' in info. Keys: {list(info.keys())}")
 
             # Increment step counter
             step_count += 1
