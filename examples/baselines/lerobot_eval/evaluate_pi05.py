@@ -174,27 +174,39 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
 
     with torch.no_grad():
         while episodes_completed < num_episodes and step_count < MAX_STEPS_PER_EPISODE * num_episodes:
-            # Debug: Print progress every 10 steps to show it's not stuck
-            if step_count % 10 == 0:
+            # Debug: Print progress every step for first 20 steps, then every 10 steps
+            if step_count < 20 or step_count % 10 == 0:
                 print(f"  [Step {step_count}] Episodes completed: {episodes_completed}/{num_episodes}")
 
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
 
             # Preprocess observation (converts to tensors, normalizes, etc.)
+            if step_count < 5:
+                print(f"    → preprocess_observation()...")
             obs_processed = preprocess_observation(obs)
+            if step_count < 5:
+                print(f"    ← preprocess_observation() returned")
 
             # Add task description
+            if step_count < 5:
+                print(f"    → add_envs_task()...")
             obs_processed = add_envs_task(env, obs_processed)
+            if step_count < 5:
+                print(f"    ← add_envs_task() returned")
 
             # Apply policy preprocessor (adds batch dim, tokenizes, etc.)
+            if step_count < 5:
+                print(f"    → preprocessor()...")
             obs_batch = preprocessor(obs_processed)
+            if step_count < 5:
+                print(f"    ← preprocessor() returned")
 
             # Get action from policy (this is where it might hang)
-            if step_count % 10 == 0:
+            if step_count < 20:
                 print(f"    → Calling policy.select_action()...")
             action = policy.select_action(obs_batch)
-            if step_count % 10 == 0:
+            if step_count < 20:
                 print(f"    ← policy.select_action() returned")
 
             # Postprocess action (unnormalize, etc.)
@@ -204,9 +216,52 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             action_numpy = action_processed.cpu().numpy()
 
             # Step environment
+            if step_count < 20:
+                print(f"    → env.step()...")
             obs, reward, terminated, truncated, info = env.step(action_numpy)
+            if step_count < 20:
+                print(f"    ← env.step() returned")
+                print(f"      terminated: {terminated}, truncated: {truncated}")
+                print(f"      info keys: {info.keys() if info else 'None'}")
 
             # Collect metrics when episodes finish
+            if terminated.any() or truncated.any():
+                done = terminated | truncated
+
+                # Check for final_info (contains success metrics)
+                if "final_info" in info:
+                    final_info = info["final_info"]
+
+                    # Count episodes that just finished
+                    for i, is_done in enumerate(done):
+                        if is_done and episodes_completed < num_episodes:
+                            episodes_completed += 1
+
+                            # Extract success metric
+                            if "is_success" in final_info:
+                                success = final_info["is_success"][i]
+                                metrics["success"].append(success)
+
+                            # Extract episode return
+                            if "episode" in final_info:
+                                ep_info = final_info["episode"]
+                                if "r" in ep_info:
+                                    metrics["return"].append(ep_info["r"][i])
+                                if "l" in ep_info:
+                                    metrics["length"].append(ep_info["l"][i])
+
+                    print(f"Episodes completed: {episodes_completed}/{num_episodes}")
+
+            # Increment step counter
+            step_count += 1
+
+        # Safety check: Did we exit due to max steps?
+        if step_count >= MAX_STEPS_PER_EPISODE * num_episodes:
+            print(f"\n⚠️  WARNING: Reached maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes} steps)")
+            print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
+            print(f"   This may indicate the policy or environment is not working correctly.")
+
+    return metrics
             if terminated.any() or truncated.any():
                 done = terminated | truncated
 
