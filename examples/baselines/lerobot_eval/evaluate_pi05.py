@@ -164,8 +164,13 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     metrics = defaultdict(list)
     num_envs = env.num_envs
     episodes_completed = 0
-    step_count = 0  # Add step counter to prevent infinite loops
+    step_count = 0  # Global step counter for overall progress
     MAX_STEPS_PER_EPISODE = 500  # Safety limit: maximum steps per episode
+
+    # Per-environment step tracking for accurate timeout detection
+    episode_steps = [0] * num_envs
+    episode_completing = [False] * num_envs  # Track which environments are finishing an episode
+    last_progress_percent = -10  # Track last progress percentage displayed
 
     obs, info = env.reset()
 
@@ -173,15 +178,24 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     print(f"Safety: Maximum {MAX_STEPS_PER_EPISODE} steps per episode allowed\n")
 
     with torch.no_grad():
-        # FIX: Track steps per episode to prevent infinite loops
-        episode_steps = [0] * num_envs  # Steps counter for each parallel environment
+        while episodes_completed < num_episodes:
+            # Progress display logic
+            total_episodes = num_episodes
+            progress_percent = int((episodes_completed / total_episodes) * 100)
 
-        while episodes_completed < num_episodes and step_count < MAX_STEPS_PER_EPISODE * num_episodes:
-            # Debug: Print progress every step for first 20 steps, then every 10 steps
-            if step_count < 20 or step_count % 10 == 0:
-                print(f"  [Step {step_count}] Episodes completed: {episodes_completed}/{num_episodes}")
-                if step_count < 20:
-                    print(f"    Episode steps: {episode_steps}")  # Show steps per environment
+            # Show detailed debug info for first 20 steps, then every 10 steps or at progress milestones
+            show_detail = step_count < 20 or step_count % 10 == 0 or progress_percent != last_progress_percent
+            if show_detail:
+                print(f"  [Step {step_count}] Progress: {episodes_completed}/{total_episodes} episodes ({progress_percent}%)")
+                if step_count < 20 or progress_percent != last_progress_percent:
+                    print(f"    Episode steps per env: {episode_steps}")
+                last_progress_percent = progress_percent
+
+            # Check for individual environment timeouts
+            for i in range(num_envs):
+                if episode_steps[i] >= MAX_STEPS_PER_EPISODE and not episode_completing[i]:
+                    print(f"    ⚠️  Env {i} reached max steps ({MAX_STEPS_PER_EPISODE}) - forcing episode end")
+                    episode_completing[i] = True
 
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
@@ -235,53 +249,124 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                 print(f"      episode steps: {episode_steps}")
                 print(f"      info keys: {info.keys() if info else 'None'}")
 
-            # Collect metrics when episodes finish
+            # Collect metrics when episodes finish - Multiple detection methods
+            done = None
+            done_detection_method = ""
+
+            # Method 1: Check environment flags
             if terminated.any() or truncated.any():
                 done = terminated | truncated
+                done_detection_method = "env_flags"
+            # Method 2: Check final_info presence (backup method)
+            elif "final_info" in info and info["final_info"] is not None:
+                # Some episodes might complete without terminal signal
+                final_info = info["final_info"]
+                if isinstance(final_info, dict) and any(k in final_info for k in ["is_success", "episode"]):
+                    # Create done mask based on final_info content
+                    if "is_success" in final_info:
+                        success_array = final_info["is_success"]
+                        if hasattr(success_array, '__len__') and len(success_array) == num_envs:
+                            # Check which environments have completed
+                            completed_envs = [i for i, s in enumerate(success_array) if s is not None]
+                            if completed_envs:
+                                done = np.zeros(num_envs, dtype=bool)
+                                done[completed_envs] = True
+                                done_detection_method = "final_info_success"
 
-                # EMERGENCY CHECK: Did any episode end?
-                if step_count < 10:
-                    print(f"    DEBUG: terminated={terminated.any()}, truncated={truncated.any()}, done={done.any()}")
-                    if done.any():
-                        print(f"    DEBUG: done indices: {torch.where(done)[0].tolist()}")
+            # Only process if we detected any completed episodes
+            if done is not None and done.any():
 
-                # Check for final_info (contains success metrics)
-                if "final_info" in info:
-                    final_info = info["final_info"]
+                # Enhanced episode completion processing with detailed debug
+                completed_count = 0
+                for i, is_done in enumerate(done):
+                    if is_done and episodes_completed < num_episodes:
+                        episodes_completed += 1
+                        completed_count += 1
 
-                    # Count episodes that just finished
-                    for i, is_done in enumerate(done):
-                        if is_done and episodes_completed < num_episodes:
-                            episodes_completed += 1
+                        # Extract metrics with multiple fallback methods
+                        success = None
+                        episode_return = None
+                        episode_length = None
 
-                            # Extract success metric
-                            if "is_success" in final_info:
-                                success = final_info["is_success"][i]
-                                metrics["success"].append(success)
+                        # Method 1: Use final_info if available
+                        if "final_info" in info and info["final_info"] is not None:
+                            final_info = info["final_info"]
 
-                            # Extract episode return
-                            if "episode" in final_info:
+                            # Success metric
+                            if isinstance(final_info, dict) and "is_success" in final_info:
+                                if hasattr(final_info["is_success"], '__getitem__') and len(final_info["is_success"]) > i:
+                                    success = final_info["is_success"][i]
+
+                            # Episode stats
+                            if isinstance(final_info, dict) and "episode" in final_info:
                                 ep_info = final_info["episode"]
-                                if "r" in ep_info:
-                                    metrics["return"].append(ep_info["r"][i])
-                                if "l" in ep_info:
-                                    metrics["length"].append(ep_info["l"][i])
+                                if isinstance(ep_info, dict):
+                                    if "r" in ep_info and hasattr(ep_info["r"], '__getitem__') and len(ep_info["r"]) > i:
+                                        episode_return = ep_info["r"][i]
+                                    if "l" in ep_info and hasattr(ep_info["l"], '__getitem__') and len(ep_info["l"]) > i:
+                                        episode_length = ep_info["l"][i]
 
-                    print(f"Episodes completed: {episodes_completed}/{num_episodes}")
-                    # FIX: Reset step counter for completed episodes
-                    for i, is_done in enumerate(done):
-                        if is_done:
-                            episode_steps[i] = 0
+                        # Store metrics
+                        if success is not None:
+                            metrics["success"].append(success)
+                        if episode_return is not None:
+                            metrics["return"].append(episode_return)
+                        if episode_length is not None:
+                            metrics["length"].append(episode_length)
 
-            # Increment step counter
+                        # Reset environment tracking
+                        episode_steps[i] = 0
+                        episode_completing[i] = False
+
+                # Print completion summary
+                if completed_count > 0:
+                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method} method"
+                    if done_detection_method == "env_flags":
+                        term_count = terminated.sum() if hasattr(terminated, 'sum') else sum(terminated)
+                        trunc_count = truncated.sum() if hasattr(truncated, 'sum') else sum(truncated)
+                        summary += f" (term: {term_count}, trunc: {trunc_count})"
+                    print(summary)
+
+                # Detailed debug for early steps
+                if step_count < 20:
+                    print(f"    DEBUG: Detection method={done_detection_method}")
+                    print(f"    DEBUG: Episodes completed: {episodes_completed}/{num_episodes}")
+                    print(f"    DEBUG: Done mask: {done.tolist() if hasattr(done, 'tolist') else done}")
+
+            # Check for overall timeout (emergency exit)
+            # Each environment has max steps, but we also need overall safety timeout
+            if step_count >= MAX_STEPS_PER_EPISODE * num_episodes * 2:  # Very conservative limit
+                print(f"\n🔴 EMERGENCY: Reached overall maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes * 2} steps)")
+                print(f"    Episodes completed: {episodes_completed}/{num_episodes}")
+                print(f"    This should not happen in normal operation!")
+                break
+
+            # Increment global step counter
             step_count += 1
 
-        # Safety check: Did we exit due to max steps?
-        if step_count >= MAX_STEPS_PER_EPISODE * num_episodes:
-            print(f"\n⚠️  WARNING: Reached maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes} steps)")
-            print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
-            print(f"   Episode steps: {episode_steps}")
-            print(f"   This may indicate the policy or environment is not working correctly.")
+        # Safety check: Did we complete all episodes?
+        if episodes_completed < num_episodes:
+            print(f"\n⚠️  WARNING: Evaluation ended before completing all episodes")
+            print(f"   Completed: {episodes_completed}/{num_episodes} episodes")
+            print(f"   Total steps: {step_count}")
+            print(f"   Episode steps per env: {episode_steps}")
+            print(f"   This usually means the policy or environment had unexpected behavior.")
+            print(f"   Possible causes:")
+            print(f"   - Policy output is causing environment hangs")
+            print(f"   - Environment is not properly resetting after completion")
+            print(f"   - Something is blocking episode termination")
+
+        # Print final summary
+        print(f"\n🏁 Evaluation Summary:")
+        print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
+        print(f"   Total global steps: {step_count}")
+        print(f"   Average steps per episode: {step_count / max(episodes_completed, 1):.1f}")
+
+        # Check if success metrics were collected
+        if "success" not in metrics or len(metrics["success"]) == 0:
+            print(f"\n❌ No success metrics were collected!")
+            print(f"   This indicates episodes were detected as 'done' but no final_info was available")
+            print(f"   Check that the environment is properly configured to return success signals")
 
     return metrics
 

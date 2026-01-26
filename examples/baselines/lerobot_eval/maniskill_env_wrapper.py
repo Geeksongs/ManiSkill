@@ -171,22 +171,62 @@ class ManiSkillVectorEnvWrapper(gym.Wrapper):
         Returns:
             LeRobot-formatted observation dictionary
         """
-        # Extract RGB image from sensor_data
-        # ManiSkill vectorized: (num_envs, 128, 128, 3) torch.uint8
-        rgb_tensor = obs['sensor_data']['base_camera']['rgb']
+        try:
+            # Extract RGB image from sensor_data
+            # ManiSkill vectorized: (num_envs, 128, 128, 3) torch.uint8
+            rgb_tensor = obs['sensor_data']['base_camera']['rgb']
 
-        # Convert to numpy, already has batch dimension
-        pixels = rgb_tensor.cpu().numpy() if hasattr(rgb_tensor, 'cpu') else rgb_tensor
+            # Safe conversion to numpy with device checks
+            if hasattr(rgb_tensor, 'cpu'):
+                pixels = rgb_tensor.cpu().numpy()
+            elif hasattr(rgb_tensor, 'numpy'):
+                pixels = rgb_tensor.numpy()
+            else:
+                # Already numpy array
+                pixels = rgb_tensor
 
-        # Extract robot state from agent.qpos
-        # ManiSkill vectorized: (num_envs, 9) - we take first 8 dimensions
-        qpos = obs['agent']['qpos']
-        agent_pos = qpos[:, :8].cpu().numpy() if hasattr(qpos, 'cpu') else qpos[:, :8]
+            # Ensure correct data type
+            if pixels.dtype != np.uint8:
+                pixels = pixels.astype(np.uint8)
 
-        # Return pixels as dict so preprocess_observation maps to observation.images.image
-        return {
-            'pixels': {
-                'image': pixels  # This will become observation.images.image
-            },
-            'agent_pos': agent_pos.astype(np.float32)
-        }
+            # Extract robot state from agent.qpos
+            # ManiSkill vectorized: (num_envs, 9) - we take first 8 dimensions
+            qpos = obs['agent']['qpos']
+
+            # Safe conversion with device checks
+            if hasattr(qpos, 'cpu'):
+                agent_pos = qpos[:, :8].cpu().numpy()
+            elif hasattr(qpos, 'numpy'):
+                agent_pos = qpos[:, :8].numpy()
+            else:
+                # Already numpy array
+                agent_pos = qpos[:, :8]
+
+            # Ensure correct shape and data type
+            agent_pos = agent_pos.astype(np.float32)
+
+            # Return pixels as dict so preprocess_observation maps to observation.images.image
+            result = {
+                'pixels': {
+                    'image': pixels  # This will become observation.images.image
+                },
+                'agent_pos': agent_pos
+            }
+
+            return result
+
+        except Exception as e:
+            # Enhanced error reporting
+            print(f"\n🔴 ERROR in observation conversion: {type(e).__name__}")
+            print(f"   Error details: {str(e)}")
+            print(f"   Observation keys: {list(obs.keys()) if isinstance(obs, dict) else 'Not a dict'}")
+
+            # Include what data is available for debugging
+            if 'sensor_data' in obs:
+                print(f"   sensor_data keys: {list(obs['sensor_data'].keys())}")
+                if 'base_camera' in obs['sensor_data']:
+                    print(f"   base_camera keys: {list(obs['sensor_data']['base_camera'].keys())}")
+            if 'agent' in obs:
+                print(f"   agent keys: {list(obs['agent'].keys())}")
+
+            raise RuntimeError(f"Failed to convert observation: {str(e)}") from e
