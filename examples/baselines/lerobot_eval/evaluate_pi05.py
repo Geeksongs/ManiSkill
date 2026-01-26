@@ -97,7 +97,7 @@ def parse_args():
     parser.add_argument(
         "--max-episode-steps",
         type=int,
-        default=None,
+        default=150,
         help="Maximum steps per episode (None = use env default)"
     )
 
