@@ -167,10 +167,26 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     step_count = 0  # Global step counter for overall progress
     MAX_STEPS_PER_EPISODE = 500  # Safety limit: maximum steps per episode
 
-    # Per-environment step tracking for accurate timeout detection
-    episode_steps = [0] * num_envs
-    episode_completing = [False] * num_envs  # Track which environments are finishing an episode
-    last_progress_percent = -10  # Track last progress percentage displayed
+    # Print completion summary with stats
+                if completed_count > 0:
+                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method}"
+                    print(summary)
+                    if done_detection_method.startswith("env_flags"):
+                        steps_taken = sum(episode_steps_before_reset)
+                        avg_steps = steps_taken / completed_count
+                        print(f"    📊 Episode stats: avg_steps={avg_steps:.1f}, total_steps={steps_taken}")
+
+                # Enhanced debug: show why these episodes ended early
+                if done_detection_method.startswith("env_flags"):
+                    if hasattr(done, '__iter__'):
+                        done_indices = [i for i, d in enumerate(done) if d]
+                    else:
+                        done_indices = [0] if done else []
+                    for i in done_indices:
+                        if episode_steps_before_reset[i] <= 2:
+                            print(f"    ⚠️  Env {i} ended early: Only {episode_steps_before_reset[i]} steps")
+                            if 'truncated' in done_detection_method and episode_steps_before_reset[i] <= 2:
+                                print(f"        This is likely the environment time limit being triggered incorrectly")
 
     obs, info = env.reset()
 
@@ -249,14 +265,45 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                 print(f"      episode steps: {episode_steps}")
                 print(f"      info keys: {info.keys() if info else 'None'}")
 
+            # KEY DEBUG: Check episode termination details
+            if step_count < 50 or (terminated.any() if hasattr(terminated, 'any') else terminated) or (truncated.any() if hasattr(truncated, 'any') else truncated):
+                print(f"    📍 STEP {step_count} DETAILED CHECK:")
+                print(f"      term type: {type(terminated)}, val: {terminated}")
+                print(f"      trunc type: {type(truncated)}, val: {truncated}")
+                if info and 'elapsed_steps' in info:
+                    print(f"      elapsed_steps from env: {info['elapsed_steps']}")
+                if reward is not None:
+                    print(f"      reward: {reward}")
+
+            # Check if this is the first step termination (abnormal)
+            if episode_steps[0] <= 1 and ((truncated.any() if hasattr(truncated, 'any') else truncated) or (terminated.any() if hasattr(terminated, 'any') else terminated)):
+                print(f"    ⚠️  ALERT: Episode ending on first/second step!")
+                print(f"      This might indicate environment config or policy issues")
+                print(f"      Policy might be outputting extreme actions causing immediate failure")
+
             # Collect metrics when episodes finish - Multiple detection methods
             done = None
             done_detection_method = ""
 
-            # Method 1: Check environment flags
-            if terminated.any() or truncated.any():
-                done = terminated | truncated
-                done_detection_method = "env_flags"
+            # Method 1: Check environment flags - handle both scalar and array
+            term_flag = terminated.any() if hasattr(terminated, 'any') else terminated
+            trunc_flag = truncated.any() if hasattr(truncated, 'any') else truncated
+
+            if term_flag or trunc_flag:
+                done = terminated | truncated  # Preserve original array structure
+                done_detection_method = f"env_flags(termed:{term_flag}, trunc:{trunc_flag})"
+
+                    # Additional debug for environment flags
+                print(f"    🔍 ENV FLAGS TRIGGERED:")
+                print(f"      term type: {type(terminated)}, value: {terminated}")
+                print(f"      trunc type: {type(truncated)}, value: {truncated}")
+                if info.get('max_episode_steps', None):
+                    print(f"      env max_steps: {info['max_episode_steps']}")
+                if 'TimeLimit.truncated' in info:
+                    print(f"      TimeLimit.truncated: {info['TimeLimit.truncated']}")
+                if 'TimeLimit' in str(info.keys()):
+                    time_limit_keys = [k for k in info.keys() if 'TimeLimit' in str(k)]
+                    print(f"      TimeLimit keys: {time_limit_keys}")
             # Method 2: Check final_info presence (backup method)
             elif "final_info" in info and info["final_info"] is not None:
                 # Some episodes might complete without terminal signal
@@ -278,6 +325,9 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
 
                 # Enhanced episode completion processing with detailed debug
                 completed_count = 0
+                # Save step counts before resetting
+                episode_steps_before_reset = episode_steps.copy()
+
                 for i, is_done in enumerate(done):
                     if is_done and episodes_completed < num_episodes:
                         episodes_completed += 1
@@ -317,21 +367,34 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                         # Reset environment tracking
                         episode_steps[i] = 0
                         episode_completing[i] = False
+                        episode_count_since_reset[i] += 1
+                        episode_count_since_reset[i] += 1
 
                 # Print completion summary
                 if completed_count > 0:
-                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method} method"
-                    if done_detection_method == "env_flags":
-                        term_count = terminated.sum() if hasattr(terminated, 'sum') else sum(terminated)
-                        trunc_count = truncated.sum() if hasattr(truncated, 'sum') else sum(truncated)
-                        summary += f" (term: {term_count}, trunc: {trunc_count})"
+                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method}"
                     print(summary)
+                    print(f"    📊 Per-env stats: steps_before_end={episode_steps_before_reset}, episodes_since_start={episode_count_since_reset}")
 
-                # Detailed debug for early steps
-                if step_count < 20:
-                    print(f"    DEBUG: Detection method={done_detection_method}")
-                    print(f"    DEBUG: Episodes completed: {episodes_completed}/{num_episodes}")
-                    print(f"    DEBUG: Done mask: {done.tolist() if hasattr(done, 'tolist') else done}")
+                # Enhanced debug: show why these episodes ended
+                if done_detection_method.startswith("env_flags"):
+                    if hasattr(done, '__iter__'):
+                        done_indices = [i for i, d in enumerate(done) if d]
+                    else:
+                        done_indices = [0] if done else []
+                    for i in done_indices:
+                        # Check if this is the first actual step of the episode
+                        if episode_steps_before_reset[i] <= 2:
+                            print(f"    📍 Env {i} ended unusually early at step {episode_steps_before_reset[i]}")
+                            if info and len(list(info.keys())) > 0:
+                                # Try to get per-env info
+                                try:
+                                    env_info = {k: v[i] if hasattr(v, '__getitem__') else v for k, v in info.items()}
+                                    relevant_keys = [k for k in env_info.keys() if any(term in k.lower() for term in ['success', 'done', 'trunc', 'term', 'fail'])]
+                                    if relevant_keys:
+                                        print(f"       Relevant info: {relevant_keys}")
+                                except:
+                                    pass
 
             # Check for overall timeout (emergency exit)
             # Each environment has max steps, but we also need overall safety timeout
