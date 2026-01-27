@@ -132,18 +132,27 @@ def make_eval_env(args):
         "obs_mode": args.obs_mode,
         "sim_backend": args.sim_backend,
         "num_envs": args.num_envs,
-        "render_mode": "rgb_array",  # Required for video recording
     }
+
+    # Only add render_mode when video recording is requested
+    if args.save_video:
+        env_kwargs["render_mode"] = "rgb_array"
 
     if args.max_episode_steps is not None:
         env_kwargs["max_episode_steps"] = args.max_episode_steps
 
     env = gym.make(args.env_id, **env_kwargs)
 
-    # Add video recording wrapper if requested
+    # Wrap with LeRobot wrapper to add task description FIRST
+    # (RecordEpisode must come after to record from the base env properly)
+    env = ManiSkillVectorEnvWrapper(env, task_description=args.task_description)
+
+    # Add video recording wrapper if requested (after LeRobot wrapper)
     if args.save_video:
         video_dir = Path(args.video_dir)
         video_dir.mkdir(parents=True, exist_ok=True)
+        # Note: RecordEpisode needs access to the underlying ManiSkill env for rendering
+        # We wrap it last but it will use env.unwrapped for rendering
         env = RecordEpisode(
             env,
             output_dir=str(video_dir),
@@ -155,9 +164,6 @@ def make_eval_env(args):
             max_steps_per_video=args.max_episode_steps if args.max_episode_steps else 500,
         )
         print(f"✓ Video recording enabled, saving to: {video_dir}")
-
-    # Wrap with LeRobot wrapper to add task description
-    env = ManiSkillVectorEnvWrapper(env, task_description=args.task_description)
 
     return env
 
