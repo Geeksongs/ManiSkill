@@ -280,26 +280,27 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                         episodes_completed += 1
                         print(f"  → Episode {episodes_completed} completed at step {step_count}")
 
-                        # Check for final_info (contains success metrics)
-                        if "final_info" in info and info["final_info"] is not None:
-                            final_info = info["final_info"]
+                        # Try to extract success from info directly (ManiSkill style)
+                        if "success" in info:
+                            success_val = info["success"]
+                            if hasattr(success_val, '__getitem__'):
+                                success = bool(success_val[i])
+                            else:
+                                success = bool(success_val)
+                            metrics["success"].append(success)
+                            print(f"    Success (from info): {success}")
 
-                            # Extract success metric
+                        # Also check final_info (LeRobot/Gym style)
+                        elif "final_info" in info and info["final_info"] is not None:
+                            final_info = info["final_info"]
                             if isinstance(final_info, dict) and "is_success" in final_info:
                                 success = final_info["is_success"][i] if hasattr(final_info["is_success"], '__getitem__') else final_info["is_success"]
-                                metrics["success"].append(success)
-                                print(f"    Success: {success}")
+                                metrics["success"].append(bool(success))
+                                print(f"    Success (from final_info): {success}")
 
-                            # Extract episode return
-                            if isinstance(final_info, dict) and "episode" in final_info:
-                                ep_info = final_info["episode"]
-                                if isinstance(ep_info, dict):
-                                    if "r" in ep_info:
-                                        metrics["return"].append(ep_info["r"][i] if hasattr(ep_info["r"], '__getitem__') else ep_info["r"])
-                                    if "l" in ep_info:
-                                        metrics["length"].append(ep_info["l"][i] if hasattr(ep_info["l"], '__getitem__') else ep_info["l"])
-                        else:
-                            print(f"    Warning: No final_info available")
+                        # Record episode length
+                        metrics["length"].append(step_count)
+                        print(f"    Episode length: {step_count} steps")
 
                 print(f"Episodes completed: {episodes_completed}/{num_episodes}")
 
@@ -403,16 +404,22 @@ def main():
     print("Evaluation Results")
     print("="*80)
 
-    if "success" in metrics:
-        success_rate = np.mean(metrics["success"])
-        print(f"\n✓ Success Rate: {success_rate*100:.2f}% ({np.sum(metrics['success'])}/{len(metrics['success'])})")
+    print(f"\nTotal episodes evaluated: {args.num_episodes}")
+    print(f"Metrics collected: {list(metrics.keys())}")
 
-    if "return" in metrics:
+    if "success" in metrics and len(metrics["success"]) > 0:
+        success_rate = np.mean(metrics["success"])
+        num_success = np.sum(metrics["success"])
+        print(f"\n✓ Success Rate: {success_rate*100:.2f}% ({num_success}/{len(metrics['success'])})")
+    else:
+        print(f"\n⚠ No success metrics collected")
+
+    if "return" in metrics and len(metrics["return"]) > 0:
         avg_return = np.mean(metrics["return"])
         std_return = np.std(metrics["return"])
         print(f"✓ Average Return: {avg_return:.2f} ± {std_return:.2f}")
 
-    if "length" in metrics:
+    if "length" in metrics and len(metrics["length"]) > 0:
         avg_length = np.mean(metrics["length"])
         print(f"✓ Average Episode Length: {avg_length:.1f} steps")
 
