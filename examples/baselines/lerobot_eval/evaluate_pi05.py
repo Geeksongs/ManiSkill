@@ -23,6 +23,7 @@ import gymnasium as gym
 import os
 
 import mani_skill.envs
+from mani_skill.utils.wrappers import RecordEpisode
 from maniskill_env_wrapper import ManiSkillVectorEnvWrapper
 
 # LeRobot imports
@@ -131,12 +132,29 @@ def make_eval_env(args):
         "obs_mode": args.obs_mode,
         "sim_backend": args.sim_backend,
         "num_envs": args.num_envs,
+        "render_mode": "rgb_array",  # Required for video recording
     }
 
     if args.max_episode_steps is not None:
         env_kwargs["max_episode_steps"] = args.max_episode_steps
 
     env = gym.make(args.env_id, **env_kwargs)
+
+    # Add video recording wrapper if requested
+    if args.save_video:
+        video_dir = Path(args.video_dir)
+        video_dir.mkdir(parents=True, exist_ok=True)
+        env = RecordEpisode(
+            env,
+            output_dir=str(video_dir),
+            save_trajectory=False,
+            save_video=True,
+            info_on_video=True,
+            source_type="pi05",
+            source_desc="Pi0.5 evaluation rollout",
+            max_steps_per_video=args.max_episode_steps if args.max_episode_steps else 500,
+        )
+        print(f"✓ Video recording enabled, saving to: {video_dir}")
 
     # Wrap with LeRobot wrapper to add task description
     env = ManiSkillVectorEnvWrapper(env, task_description=args.task_description)
@@ -167,26 +185,11 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     step_count = 0  # Global step counter for overall progress
     MAX_STEPS_PER_EPISODE = 500  # Safety limit: maximum steps per episode
 
-    # Print completion summary with stats
-                if completed_count > 0:
-                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method}"
-                    print(summary)
-                    if done_detection_method.startswith("env_flags"):
-                        steps_taken = sum(episode_steps_before_reset)
-                        avg_steps = steps_taken / completed_count
-                        print(f"    📊 Episode stats: avg_steps={avg_steps:.1f}, total_steps={steps_taken}")
-
-                # Enhanced debug: show why these episodes ended early
-                if done_detection_method.startswith("env_flags"):
-                    if hasattr(done, '__iter__'):
-                        done_indices = [i for i, d in enumerate(done) if d]
-                    else:
-                        done_indices = [0] if done else []
-                    for i in done_indices:
-                        if episode_steps_before_reset[i] <= 2:
-                            print(f"    ⚠️  Env {i} ended early: Only {episode_steps_before_reset[i]} steps")
-                            if 'truncated' in done_detection_method and episode_steps_before_reset[i] <= 2:
-                                print(f"        This is likely the environment time limit being triggered incorrectly")
+    # Initialize tracking variables
+    episode_steps = [0] * num_envs
+    episode_completing = [False] * num_envs
+    episode_count_since_reset = [0] * num_envs
+    last_progress_percent = -1
 
     obs, info = env.reset()
 
@@ -367,7 +370,6 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                         # Reset environment tracking
                         episode_steps[i] = 0
                         episode_completing[i] = False
-                        episode_count_since_reset[i] += 1
                         episode_count_since_reset[i] += 1
 
                 # Print completion summary
