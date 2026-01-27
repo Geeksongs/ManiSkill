@@ -184,6 +184,7 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     metrics = defaultdict(list)
     num_envs = env.num_envs
     episodes_completed = 0
+    step_count = 0
 
     obs, info = env.reset()
 
@@ -193,6 +194,20 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
         while episodes_completed < num_episodes:
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
+
+            # Debug: Print observation info (first 5 steps)
+            if step_count < 5:
+                print(f"\n[Step {step_count}] === Observation Debug ===")
+                print(f"  obs keys: {obs.keys()}")
+                if 'pixels' in obs:
+                    pixels = obs['pixels']
+                    if isinstance(pixels, dict):
+                        for k, v in pixels.items():
+                            print(f"  pixels['{k}']: shape={v.shape}, dtype={v.dtype}")
+                    else:
+                        print(f"  pixels: shape={pixels.shape}, dtype={pixels.dtype}")
+                if 'agent_pos' in obs:
+                    print(f"  agent_pos: shape={obs['agent_pos'].shape}, values={obs['agent_pos']}")
 
             # Preprocess observation (converts to tensors, normalizes, etc.)
             obs_processed = preprocess_observation(obs)
@@ -206,14 +221,41 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             # Get action from policy
             action = policy.select_action(obs_batch)
 
+            # Debug: Print action info (first 10 steps)
+            if step_count < 10:
+                print(f"\n[Step {step_count}] === Action Debug ===")
+                print(f"  Raw action from policy:")
+                print(f"    type: {type(action)}")
+                if hasattr(action, 'shape'):
+                    print(f"    shape: {action.shape}")
+                if hasattr(action, 'dtype'):
+                    print(f"    dtype: {action.dtype}")
+                if hasattr(action, 'device'):
+                    print(f"    device: {action.device}")
+                print(f"    values: {action}")
+
             # Postprocess action (unnormalize, etc.)
             action_processed = postprocessor(action)
+
+            # Debug: Print processed action (first 10 steps)
+            if step_count < 10:
+                print(f"  Postprocessed action:")
+                print(f"    shape: {action_processed.shape}")
+                print(f"    values: {action_processed}")
 
             # Convert to numpy for environment
             action_numpy = action_processed.cpu().numpy()
 
+            # Debug: Print final numpy action (first 10 steps)
+            if step_count < 10:
+                print(f"  Final numpy action for env:")
+                print(f"    shape: {action_numpy.shape}")
+                print(f"    values: {action_numpy}")
+                print(f"    min: {action_numpy.min():.4f}, max: {action_numpy.max():.4f}")
+
             # Step environment
             obs, reward, terminated, truncated, info = env.step(action_numpy)
+            step_count += 1
 
             # Collect metrics when episodes finish
             if terminated.any() or truncated.any():
