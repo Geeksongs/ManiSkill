@@ -271,29 +271,37 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             if terminated.any() or truncated.any():
                 done = terminated | truncated
 
-                # Check for final_info (contains success metrics)
-                if "final_info" in info:
-                    final_info = info["final_info"]
+                # Debug: print info keys
+                print(f"  Episode done! info keys: {info.keys()}")
 
-                    # Count episodes that just finished
-                    for i, is_done in enumerate(done):
-                        if is_done and episodes_completed < num_episodes:
-                            episodes_completed += 1
+                # Count episodes that just finished
+                for i, is_done in enumerate(done):
+                    if is_done and episodes_completed < num_episodes:
+                        episodes_completed += 1
+                        print(f"  → Episode {episodes_completed} completed at step {step_count}")
+
+                        # Check for final_info (contains success metrics)
+                        if "final_info" in info and info["final_info"] is not None:
+                            final_info = info["final_info"]
 
                             # Extract success metric
-                            if "is_success" in final_info:
-                                success = final_info["is_success"][i]
+                            if isinstance(final_info, dict) and "is_success" in final_info:
+                                success = final_info["is_success"][i] if hasattr(final_info["is_success"], '__getitem__') else final_info["is_success"]
                                 metrics["success"].append(success)
+                                print(f"    Success: {success}")
 
                             # Extract episode return
-                            if "episode" in final_info:
+                            if isinstance(final_info, dict) and "episode" in final_info:
                                 ep_info = final_info["episode"]
-                                if "r" in ep_info:
-                                    metrics["return"].append(ep_info["r"][i])
-                                if "l" in ep_info:
-                                    metrics["length"].append(ep_info["l"][i])
+                                if isinstance(ep_info, dict):
+                                    if "r" in ep_info:
+                                        metrics["return"].append(ep_info["r"][i] if hasattr(ep_info["r"], '__getitem__') else ep_info["r"])
+                                    if "l" in ep_info:
+                                        metrics["length"].append(ep_info["l"][i] if hasattr(ep_info["l"], '__getitem__') else ep_info["l"])
+                        else:
+                            print(f"    Warning: No final_info available")
 
-                    print(f"Episodes completed: {episodes_completed}/{num_episodes}")
+                print(f"Episodes completed: {episodes_completed}/{num_episodes}")
 
     return metrics
 
