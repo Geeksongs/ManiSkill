@@ -348,6 +348,24 @@ def main():
     env = make_eval_env(args)
     print(f"✓ Environment created with {args.num_envs} parallel instances")
 
+    # Debug: Print environment action space info
+    print(f"\n=== Environment Action Space ===")
+    print(f"  Action space: {env.action_space}")
+    print(f"  Action space shape: {env.action_space.shape}")
+    if hasattr(env.action_space, 'low'):
+        print(f"  Action space low: {env.action_space.low}")
+        print(f"  Action space high: {env.action_space.high}")
+
+    # Debug: Print dataset stats (used for normalization)
+    print(f"\n=== Dataset Stats (for action normalization) ===")
+    if hasattr(dataset.meta, 'stats') and 'action' in dataset.meta.stats:
+        action_stats = dataset.meta.stats['action']
+        print(f"  Action stats keys: {action_stats.keys()}")
+        for k, v in action_stats.items():
+            print(f"  action.{k}: {v}")
+    else:
+        print(f"  Dataset stats: {dataset.meta.stats}")
+
     # 5. Evaluate policy
     print("\n" + "="*80)
     print("Starting evaluation...")
