@@ -192,12 +192,15 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
 
     with torch.no_grad():
         while episodes_completed < num_episodes:
+            # Always print step progress
+            print(f"\n[Step {step_count}] Processing...", flush=True)
+
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
 
             # Debug: Print observation info (first 5 steps)
             if step_count < 5:
-                print(f"\n[Step {step_count}] === Observation Debug ===")
+                print(f"  === Observation Debug ===")
                 print(f"  obs keys: {obs.keys()}")
                 if 'pixels' in obs:
                     pixels = obs['pixels']
@@ -210,16 +213,21 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                     print(f"  agent_pos: shape={obs['agent_pos'].shape}, values={obs['agent_pos']}")
 
             # Preprocess observation (converts to tensors, normalizes, etc.)
+            print(f"  → preprocess_observation...", flush=True)
             obs_processed = preprocess_observation(obs)
 
             # Add task description
+            print(f"  → add_envs_task...", flush=True)
             obs_processed = add_envs_task(env, obs_processed)
 
             # Apply policy preprocessor (adds batch dim, tokenizes, etc.)
+            print(f"  → preprocessor...", flush=True)
             obs_batch = preprocessor(obs_processed)
 
             # Get action from policy
+            print(f"  → policy.select_action...", flush=True)
             action = policy.select_action(obs_batch)
+            print(f"  ← policy.select_action done", flush=True)
 
             # Debug: Print action info (first 10 steps)
             if step_count < 10:
@@ -254,7 +262,9 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
                 print(f"    min: {action_numpy.min():.4f}, max: {action_numpy.max():.4f}")
 
             # Step environment
+            print(f"  → env.step...", flush=True)
             obs, reward, terminated, truncated, info = env.step(action_numpy)
+            print(f"  ← env.step done (terminated={terminated.any() if hasattr(terminated, 'any') else terminated}, truncated={truncated.any() if hasattr(truncated, 'any') else truncated})", flush=True)
             step_count += 1
 
             # Collect metrics when episodes finish
