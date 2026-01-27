@@ -20,7 +20,6 @@ from typing import Optional
 import numpy as np
 import torch
 import gymnasium as gym
-import os
 
 import mani_skill.envs
 from mani_skill.utils.wrappers import RecordEpisode
@@ -98,7 +97,7 @@ def parse_args():
     parser.add_argument(
         "--max-episode-steps",
         type=int,
-        default=150,
+        default=None,
         help="Maximum steps per episode (None = use env default)"
     )
 
@@ -134,7 +133,7 @@ def make_eval_env(args):
         "num_envs": args.num_envs,
     }
 
-    # Only add render_mode when video recording is requested
+    # Add render_mode only when video recording is requested
     if args.save_video:
         env_kwargs["render_mode"] = "rgb_array"
 
@@ -143,16 +142,10 @@ def make_eval_env(args):
 
     env = gym.make(args.env_id, **env_kwargs)
 
-    # Wrap with LeRobot wrapper to add task description FIRST
-    # (RecordEpisode must come after to record from the base env properly)
-    env = ManiSkillVectorEnvWrapper(env, task_description=args.task_description)
-
-    # Add video recording wrapper if requested (after LeRobot wrapper)
+    # Add video recording wrapper if requested (before LeRobot wrapper)
     if args.save_video:
         video_dir = Path(args.video_dir)
         video_dir.mkdir(parents=True, exist_ok=True)
-        # Note: RecordEpisode needs access to the underlying ManiSkill env for rendering
-        # We wrap it last but it will use env.unwrapped for rendering
         env = RecordEpisode(
             env,
             output_dir=str(video_dir),
@@ -164,6 +157,9 @@ def make_eval_env(args):
             max_steps_per_video=args.max_episode_steps if args.max_episode_steps else 500,
         )
         print(f"✓ Video recording enabled, saving to: {video_dir}")
+
+    # Wrap with LeRobot wrapper to add task description
+    env = ManiSkillVectorEnvWrapper(env, task_description=args.task_description)
 
     return env
 
@@ -188,70 +184,27 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
     metrics = defaultdict(list)
     num_envs = env.num_envs
     episodes_completed = 0
-    step_count = 0  # Global step counter for overall progress
-    MAX_STEPS_PER_EPISODE = 500  # Safety limit: maximum steps per episode
-
-    # Initialize tracking variables
-    episode_steps = [0] * num_envs
-    episode_completing = [False] * num_envs
-    episode_count_since_reset = [0] * num_envs
-    last_progress_percent = -1
 
     obs, info = env.reset()
 
     print(f"\nEvaluating {num_episodes} episodes across {num_envs} parallel environments...")
-    print(f"Safety: Maximum {MAX_STEPS_PER_EPISODE} steps per episode allowed\n")
 
     with torch.no_grad():
         while episodes_completed < num_episodes:
-            # Progress display logic
-            total_episodes = num_episodes
-            progress_percent = int((episodes_completed / total_episodes) * 100)
-
-            # Show detailed debug info for first 20 steps, then every 10 steps or at progress milestones
-            show_detail = step_count < 20 or step_count % 10 == 0 or progress_percent != last_progress_percent
-            if show_detail:
-                print(f"  [Step {step_count}] Progress: {episodes_completed}/{total_episodes} episodes ({progress_percent}%)")
-                if step_count < 20 or progress_percent != last_progress_percent:
-                    print(f"    Episode steps per env: {episode_steps}")
-                last_progress_percent = progress_percent
-
-            # Check for individual environment timeouts
-            for i in range(num_envs):
-                if episode_steps[i] >= MAX_STEPS_PER_EPISODE and not episode_completing[i]:
-                    print(f"    ⚠️  Env {i} reached max steps ({MAX_STEPS_PER_EPISODE}) - forcing episode end")
-                    episode_completing[i] = True
-
             # Convert ManiSkill obs to LeRobot format (already done by wrapper)
             # obs is now: {'pixels': (num_envs, H, W, 3), 'agent_pos': (num_envs, 8)}
 
             # Preprocess observation (converts to tensors, normalizes, etc.)
-            if step_count < 5:
-                print(f"    → preprocess_observation()...")
             obs_processed = preprocess_observation(obs)
-            if step_count < 5:
-                print(f"    ← preprocess_observation() returned")
 
             # Add task description
-            if step_count < 5:
-                print(f"    → add_envs_task()...")
             obs_processed = add_envs_task(env, obs_processed)
-            if step_count < 5:
-                print(f"    ← add_envs_task() returned")
 
             # Apply policy preprocessor (adds batch dim, tokenizes, etc.)
-            if step_count < 5:
-                print(f"    → preprocessor()...")
             obs_batch = preprocessor(obs_processed)
-            if step_count < 5:
-                print(f"    ← preprocessor() returned")
 
-            # Get action from policy (this is where it might hang)
-            if step_count < 20:
-                print(f"    → Calling policy.select_action()...")
+            # Get action from policy
             action = policy.select_action(obs_batch)
-            if step_count < 20:
-                print(f"    ← policy.select_action() returned")
 
             # Postprocess action (unnormalize, etc.)
             action_processed = postprocessor(action)
@@ -260,184 +213,35 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             action_numpy = action_processed.cpu().numpy()
 
             # Step environment
-            if step_count < 20:
-                print(f"    → env.step()...")
             obs, reward, terminated, truncated, info = env.step(action_numpy)
 
-            # FIX: Increment steps for each environment
-            for i in range(num_envs):
-                episode_steps[i] += 1
+            # Collect metrics when episodes finish
+            if terminated.any() or truncated.any():
+                done = terminated | truncated
 
-            if step_count < 20:
-                print(f"    ← env.step() returned")
-                print(f"      terminated: {terminated}, truncated: {truncated}")
-                print(f"      episode steps: {episode_steps}")
-                print(f"      info keys: {info.keys() if info else 'None'}")
+                # Check for final_info (contains success metrics)
+                if "final_info" in info:
+                    final_info = info["final_info"]
 
-            # KEY DEBUG: Check episode termination details
-            if step_count < 50 or (terminated.any() if hasattr(terminated, 'any') else terminated) or (truncated.any() if hasattr(truncated, 'any') else truncated):
-                print(f"    📍 STEP {step_count} DETAILED CHECK:")
-                print(f"      term type: {type(terminated)}, val: {terminated}")
-                print(f"      trunc type: {type(truncated)}, val: {truncated}")
-                if info and 'elapsed_steps' in info:
-                    print(f"      elapsed_steps from env: {info['elapsed_steps']}")
-                if reward is not None:
-                    print(f"      reward: {reward}")
+                    # Count episodes that just finished
+                    for i, is_done in enumerate(done):
+                        if is_done and episodes_completed < num_episodes:
+                            episodes_completed += 1
 
-            # Check if this is the first step termination (abnormal)
-            if episode_steps[0] <= 1 and ((truncated.any() if hasattr(truncated, 'any') else truncated) or (terminated.any() if hasattr(terminated, 'any') else terminated)):
-                print(f"    ⚠️  ALERT: Episode ending on first/second step!")
-                print(f"      This might indicate environment config or policy issues")
-                print(f"      Policy might be outputting extreme actions causing immediate failure")
+                            # Extract success metric
+                            if "is_success" in final_info:
+                                success = final_info["is_success"][i]
+                                metrics["success"].append(success)
 
-            # Collect metrics when episodes finish - Multiple detection methods
-            done = None
-            done_detection_method = ""
-
-            # Method 1: Check environment flags - handle both scalar and array
-            term_flag = terminated.any() if hasattr(terminated, 'any') else terminated
-            trunc_flag = truncated.any() if hasattr(truncated, 'any') else truncated
-
-            if term_flag or trunc_flag:
-                done = terminated | truncated  # Preserve original array structure
-                done_detection_method = f"env_flags(termed:{term_flag}, trunc:{trunc_flag})"
-
-                    # Additional debug for environment flags
-                print(f"    🔍 ENV FLAGS TRIGGERED:")
-                print(f"      term type: {type(terminated)}, value: {terminated}")
-                print(f"      trunc type: {type(truncated)}, value: {truncated}")
-                if info.get('max_episode_steps', None):
-                    print(f"      env max_steps: {info['max_episode_steps']}")
-                if 'TimeLimit.truncated' in info:
-                    print(f"      TimeLimit.truncated: {info['TimeLimit.truncated']}")
-                if 'TimeLimit' in str(info.keys()):
-                    time_limit_keys = [k for k in info.keys() if 'TimeLimit' in str(k)]
-                    print(f"      TimeLimit keys: {time_limit_keys}")
-            # Method 2: Check final_info presence (backup method)
-            elif "final_info" in info and info["final_info"] is not None:
-                # Some episodes might complete without terminal signal
-                final_info = info["final_info"]
-                if isinstance(final_info, dict) and any(k in final_info for k in ["is_success", "episode"]):
-                    # Create done mask based on final_info content
-                    if "is_success" in final_info:
-                        success_array = final_info["is_success"]
-                        if hasattr(success_array, '__len__') and len(success_array) == num_envs:
-                            # Check which environments have completed
-                            completed_envs = [i for i, s in enumerate(success_array) if s is not None]
-                            if completed_envs:
-                                done = np.zeros(num_envs, dtype=bool)
-                                done[completed_envs] = True
-                                done_detection_method = "final_info_success"
-
-            # Only process if we detected any completed episodes
-            if done is not None and done.any():
-
-                # Enhanced episode completion processing with detailed debug
-                completed_count = 0
-                # Save step counts before resetting
-                episode_steps_before_reset = episode_steps.copy()
-
-                for i, is_done in enumerate(done):
-                    if is_done and episodes_completed < num_episodes:
-                        episodes_completed += 1
-                        completed_count += 1
-
-                        # Extract metrics with multiple fallback methods
-                        success = None
-                        episode_return = None
-                        episode_length = None
-
-                        # Method 1: Use final_info if available
-                        if "final_info" in info and info["final_info"] is not None:
-                            final_info = info["final_info"]
-
-                            # Success metric
-                            if isinstance(final_info, dict) and "is_success" in final_info:
-                                if hasattr(final_info["is_success"], '__getitem__') and len(final_info["is_success"]) > i:
-                                    success = final_info["is_success"][i]
-
-                            # Episode stats
-                            if isinstance(final_info, dict) and "episode" in final_info:
+                            # Extract episode return
+                            if "episode" in final_info:
                                 ep_info = final_info["episode"]
-                                if isinstance(ep_info, dict):
-                                    if "r" in ep_info and hasattr(ep_info["r"], '__getitem__') and len(ep_info["r"]) > i:
-                                        episode_return = ep_info["r"][i]
-                                    if "l" in ep_info and hasattr(ep_info["l"], '__getitem__') and len(ep_info["l"]) > i:
-                                        episode_length = ep_info["l"][i]
+                                if "r" in ep_info:
+                                    metrics["return"].append(ep_info["r"][i])
+                                if "l" in ep_info:
+                                    metrics["length"].append(ep_info["l"][i])
 
-                        # Store metrics
-                        if success is not None:
-                            metrics["success"].append(success)
-                        if episode_return is not None:
-                            metrics["return"].append(episode_return)
-                        if episode_length is not None:
-                            metrics["length"].append(episode_length)
-
-                        # Reset environment tracking
-                        episode_steps[i] = 0
-                        episode_completing[i] = False
-                        episode_count_since_reset[i] += 1
-
-                # Print completion summary
-                if completed_count > 0:
-                    summary = f"  ✓ Completed {completed_count} episodes via {done_detection_method}"
-                    print(summary)
-                    print(f"    📊 Per-env stats: steps_before_end={episode_steps_before_reset}, episodes_since_start={episode_count_since_reset}")
-
-                # Enhanced debug: show why these episodes ended
-                if done_detection_method.startswith("env_flags"):
-                    if hasattr(done, '__iter__'):
-                        done_indices = [i for i, d in enumerate(done) if d]
-                    else:
-                        done_indices = [0] if done else []
-                    for i in done_indices:
-                        # Check if this is the first actual step of the episode
-                        if episode_steps_before_reset[i] <= 2:
-                            print(f"    📍 Env {i} ended unusually early at step {episode_steps_before_reset[i]}")
-                            if info and len(list(info.keys())) > 0:
-                                # Try to get per-env info
-                                try:
-                                    env_info = {k: v[i] if hasattr(v, '__getitem__') else v for k, v in info.items()}
-                                    relevant_keys = [k for k in env_info.keys() if any(term in k.lower() for term in ['success', 'done', 'trunc', 'term', 'fail'])]
-                                    if relevant_keys:
-                                        print(f"       Relevant info: {relevant_keys}")
-                                except:
-                                    pass
-
-            # Check for overall timeout (emergency exit)
-            # Each environment has max steps, but we also need overall safety timeout
-            if step_count >= MAX_STEPS_PER_EPISODE * num_episodes * 2:  # Very conservative limit
-                print(f"\n🔴 EMERGENCY: Reached overall maximum step limit ({MAX_STEPS_PER_EPISODE * num_episodes * 2} steps)")
-                print(f"    Episodes completed: {episodes_completed}/{num_episodes}")
-                print(f"    This should not happen in normal operation!")
-                break
-
-            # Increment global step counter
-            step_count += 1
-
-        # Safety check: Did we complete all episodes?
-        if episodes_completed < num_episodes:
-            print(f"\n⚠️  WARNING: Evaluation ended before completing all episodes")
-            print(f"   Completed: {episodes_completed}/{num_episodes} episodes")
-            print(f"   Total steps: {step_count}")
-            print(f"   Episode steps per env: {episode_steps}")
-            print(f"   This usually means the policy or environment had unexpected behavior.")
-            print(f"   Possible causes:")
-            print(f"   - Policy output is causing environment hangs")
-            print(f"   - Environment is not properly resetting after completion")
-            print(f"   - Something is blocking episode termination")
-
-        # Print final summary
-        print(f"\n🏁 Evaluation Summary:")
-        print(f"   Episodes completed: {episodes_completed}/{num_episodes}")
-        print(f"   Total global steps: {step_count}")
-        print(f"   Average steps per episode: {step_count / max(episodes_completed, 1):.1f}")
-
-        # Check if success metrics were collected
-        if "success" not in metrics or len(metrics["success"]) == 0:
-            print(f"\n❌ No success metrics were collected!")
-            print(f"   This indicates episodes were detected as 'done' but no final_info was available")
-            print(f"   Check that the environment is properly configured to return success signals")
+                    print(f"Episodes completed: {episodes_completed}/{num_episodes}")
 
     return metrics
 
@@ -459,21 +263,12 @@ def main():
 
     # 1. Load policy
     print("Loading policy...")
-    print(f"DEBUG: Policy path = {args.policy_path}")
-    print(f"DEBUG: Is HuggingFace path = {not args.policy_path.startswith('/') and not args.policy_path.startswith('.') and not os.path.exists(args.policy_path)}")
-    print(f"DEBUG: Current working directory = {os.getcwd()}")
-    print(f"DEBUG: Absolute policy path = {os.path.abspath(args.policy_path)}")
-    print(f"DEBUG: HF_HOME env var = {os.environ.get('HF_HOME', 'Not set')}")
-    print(f"DEBUG: HF_HUB_CACHE env var = {os.environ.get('HF_HUB_CACHE', 'Not set')}")
     try:
         policy = PI05Policy.from_pretrained(args.policy_path, device=args.device)
         print(f"✓ Policy loaded: {args.policy_path}")
     except Exception as e:
         print(f"\n❌ ERROR: Failed to load policy from {args.policy_path}")
-        print(f"Error type: {type(e).__name__}")
         print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
         print("\nPossible solutions:")
         print("1. Check your internet connection")
         print("2. Try again after network is restored")
