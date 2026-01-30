@@ -40,7 +40,7 @@ class ManiSkillEnvConfig:
     sim_backend: str = "auto"
     max_episode_steps: int = 200
     camera_name: str = "base_camera"
-    state_dim: int = 8  # First 8 dims of qpos (7 joints + 1 gripper)
+    state_dim: int = 9  # qpos dimension (7 arm joints + 2 gripper joints)
     task_description: str = "Pick up the red cube and place it at the green target position."
 
 
