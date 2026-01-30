@@ -191,7 +191,7 @@ def evaluate_policy(policy, preprocessor, postprocessor, env, num_episodes, devi
             # Convert to numpy for environment
             action_numpy = action_processed.cpu().numpy()
 
-            # Step environment
+            # Step environment, put the action into the maniskill env 
             obs, reward, terminated, truncated, info = env.step(action_numpy)
 
             # Collect metrics when episodes finish
