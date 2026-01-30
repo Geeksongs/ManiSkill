@@ -146,7 +146,7 @@ class ManiSkillLeRobotWrapper(gym.Wrapper):
         agent_pos = qpos[..., :state_dim].astype(np.float32)
 
         return {
-            'pixels': {'image': rgb},
+            'pixels': {camera_name: rgb},  # Use actual camera name (e.g., 'base_camera')
             'agent_pos': agent_pos,
         }
 
@@ -281,7 +281,7 @@ class ManiSkillVectorEnvWrapper(gym.Wrapper):
         agent_pos = qpos[..., :state_dim].astype(np.float32)
 
         return {
-            'pixels': {'image': rgb},
+            'pixels': {camera_name: rgb},  # Use actual camera name (e.g., 'base_camera')
             'agent_pos': agent_pos,
         }
 
