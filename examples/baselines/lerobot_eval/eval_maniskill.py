@@ -42,6 +42,8 @@ def parse_args():
     parser.add_argument("--use-amp", action="store_true", help="Use mixed precision")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=str, default="./eval_results")
+    parser.add_argument("--save-video", action="store_true", help="Save evaluation videos")
+    parser.add_argument("--video-fps", type=int, default=30, help="Video FPS")
     return parser.parse_args()
 
 
@@ -75,12 +77,24 @@ def evaluate(
     max_steps: int,
     device: str,
     use_amp: bool = False,
+    save_video: bool = False,
+    output_dir: Path = None,
+    video_fps: int = 30,
 ):
     """Run evaluation loop."""
+    import cv2
 
     successes = []
     rewards_sum = []
     episodes_done = 0
+    step_count = 0
+
+    # Video recording setup
+    video_frames = []
+    video_dir = output_dir / "videos" if output_dir else Path("./eval_results/videos")
+    if save_video:
+        video_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Videos will be saved to: {video_dir}")
 
     obs, info = env.reset()
 
@@ -90,6 +104,17 @@ def evaluate(
 
     with torch.no_grad(), amp_context:
         while episodes_done < n_episodes:
+            # Record frame for video
+            if save_video:
+                frame = env.render()
+                if frame is not None:
+                    if hasattr(frame, 'cpu'):
+                        frame = frame.cpu().numpy()
+                    # Handle batched rendering (take first env)
+                    if frame.ndim == 4:
+                        frame = frame[0]
+                    video_frames.append(frame)
+
             # Convert observation to LeRobot format
             obs_processed = preprocess_observation(obs)
 
@@ -110,6 +135,7 @@ def evaluate(
 
             # Step environment
             obs, reward, terminated, truncated, info = env.step(action_np)
+            step_count += 1
 
             # Check for done episodes
             done = terminated | truncated
@@ -134,6 +160,14 @@ def evaluate(
                             success = False
 
                         successes.append(success)
+
+                        # Save video for this episode
+                        if save_video and video_frames:
+                            status = "success" if success else "fail"
+                            video_path = video_dir / f"episode_{episodes_done:03d}_{status}.mp4"
+                            save_video_frames(video_frames, video_path, video_fps)
+                            video_frames = []  # Reset for next episode
+
                         episodes_done += 1
                         pbar.update(1)
                         pbar.set_postfix({"success_rate": f"{np.mean(successes)*100:.1f}%"})
@@ -145,6 +179,32 @@ def evaluate(
         "success_rate": float(np.mean(successes)) if successes else 0.0,
         "successes": successes,
     }
+
+
+def save_video_frames(frames, output_path, fps=30):
+    """Save frames as MP4 video."""
+    import cv2
+
+    if not frames:
+        return
+
+    # Get frame dimensions
+    h, w = frames[0].shape[:2]
+
+    # Create video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+
+    for frame in frames:
+        # Convert RGB to BGR for OpenCV
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        else:
+            frame_bgr = frame
+        out.write(frame_bgr)
+
+    out.release()
+    print(f"  Saved video: {output_path}")
 
 
 def main():
@@ -169,6 +229,7 @@ def main():
     print(f"Task: {task_desc}")
     print(f"Episodes: {args.n_episodes}")
     print(f"Batch size: {args.batch_size}")
+    print(f"Save video: {args.save_video}")
     print()
 
     # Load policy
@@ -212,6 +273,10 @@ def main():
     print(f"  Created {args.batch_size} parallel environments")
     print()
 
+    # Output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Run evaluation
     print("=" * 60)
     print("Starting evaluation...")
@@ -227,6 +292,9 @@ def main():
         max_steps=args.max_steps,
         device=args.device,
         use_amp=args.use_amp,
+        save_video=args.save_video,
+        output_dir=output_dir,
+        video_fps=args.video_fps,
     )
 
     # Print results
@@ -238,9 +306,6 @@ def main():
     print(f"Success Rate: {results['success_rate']*100:.2f}%")
 
     # Save results
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     results_file = output_dir / "results.json"
     with open(results_file, "w") as f:
         json.dump({
@@ -257,6 +322,9 @@ def main():
             }
         }, f, indent=2)
     print(f"\nResults saved to: {results_file}")
+
+    if args.save_video:
+        print(f"Videos saved to: {output_dir / 'videos'}")
 
     # Cleanup
     env.unwrapped.close()
