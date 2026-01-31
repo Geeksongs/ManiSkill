@@ -257,6 +257,7 @@ def main():
     import gymnasium as gym
     import mani_skill.envs
     from env import ManiSkillVectorEnvWrapper
+    from mani_skill.envs.distraction_set import DistractionSet
 
     env_kwargs = {
         "obs_mode": env_config.obs_mode,
@@ -267,7 +268,17 @@ def main():
         "max_episode_steps": args.max_steps,
     }
 
-    base_env = gym.make(env_id, **env_kwargs)
+    # Some Colosseum v2 tasks require distraction_set parameter
+    # Try to create env, and if it fails with KeyError for distraction_set, add it
+    try:
+        base_env = gym.make(env_id, **env_kwargs)
+    except KeyError as e:
+        if "distraction_set" in str(e):
+            print("  Adding distraction_set for Colosseum v2 task...")
+            env_kwargs["distraction_set"] = DistractionSet()  # Empty distraction set
+            base_env = gym.make(env_id, **env_kwargs)
+        else:
+            raise
     env = ManiSkillVectorEnvWrapper(base_env, env_config)
 
     print(f"  Created {args.batch_size} parallel environments")
