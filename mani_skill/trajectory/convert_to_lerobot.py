@@ -34,7 +34,7 @@ DEFAULT_IMAGE_SIZE = "640x480"
 DEFAULT_CHUNKS_SIZE = 1000
 
 # Task mapping: env_id -> (task_index, language_description)
-# Single Arm Tasks (16 tasks)
+# Single Arm Tasks (16 tasks + 4 ColosseumV2 variants)
 SINGLE_ARM_TASK_MAPPING = {
     "CookItemInPan-v1":         (0,  "Cook the item in the pan"),
     "HammerNail-v1":            (1,  "Hammer the nail into the surface"),
@@ -52,6 +52,11 @@ SINGLE_ARM_TASK_MAPPING = {
     "RotateArrow-v1":           (13, "Rotate the arrow"),
     "ScoopBanana-v1":           (14, "Scoop the banana"),
     "StackCube-v1":             (15, "Stack one cube on top of another"),
+    # ColosseumV2 variants
+    "StackCubeColosseumV2-v1":        (16, "Stack one cube on top of another"),
+    "LiftPegUprightColosseumV2-v1":   (17, "Lift the peg upright"),
+    "PlugChargerColosseumV2-v1":      (18, "Plug in the charger"),
+    "PegInsertionSideColosseumV2-v1": (19, "Insert the peg from the side"),
 }
 
 # Bimanual Tasks (12 tasks)
